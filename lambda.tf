@@ -15,8 +15,8 @@ resource "aws_lambda_function" "http_api_lambda" {
 
   environment {
     variables = {
-      DDB_TABLE = "vseow7474-topmovies"
-    } # todo: fill with apporpriate value
+      DDB_TABLE = "vseow7474-topmovies" # todo: fill with apporpriate value
+    }
   }
 }
 

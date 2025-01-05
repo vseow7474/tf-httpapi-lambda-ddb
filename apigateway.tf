@@ -12,18 +12,16 @@ resource "aws_apigatewayv2_stage" "default" {
   # Enable Access Logging
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_gw_access_logs.arn
-    format          = jsonencode({
-      requestId       = "$context.requestId",
-      requestTime     = "$context.requestTime",
-      httpMethod      = "$context.httpMethod",
-      resourcePath    = "$context.resourcePath",
-      status          = "$context.status",
-      responseLatency = "$context.responseLatency",
+    format = jsonencode({
+      requestId               = "$context.requestId",
+      requestTime             = "$context.requestTime",
+      httpMethod              = "$context.httpMethod",
+      resourcePath            = "$context.resourcePath",
+      status                  = "$context.status",
+      responseLatency         = "$context.responseLatency",
       integrationErrorMessage = "$context.integrationErrorMessage",
     })
   }
-  # Specify the IAM role for logging
-  #cloudwatch_role_arn = aws_iam_role.api_gateway_logging_role.arn
 }
 
 resource "aws_apigatewayv2_integration" "apigw_lambda" {
@@ -35,6 +33,7 @@ resource "aws_apigatewayv2_integration" "apigw_lambda" {
   payload_format_version = "2.0"
 }
 
+# Example from Terraform Documentation
 # resource "aws_apigatewayv2_route" "example" {
 #   api_id    = aws_apigatewayv2_api.example.id
 #   route_key = "ANY /example/{proxy+}"
@@ -85,13 +84,13 @@ resource "aws_lambda_permission" "api_gw" {
 
 # Create a CloudWatch log group for API Gateway logs
 resource "aws_cloudwatch_log_group" "api_gw_access_logs" {
-  name = "/aws/apigateway/${local.name_prefix}-topmovies-access-logs"
+  name              = "/aws/apigateway/${local.name_prefix}-topmovies-access-logs"
   retention_in_days = 7
 }
 
 # Create a log group policy to allow API Gateway to write logs
 resource "aws_iam_role" "api_gw_logging_role" {
-  name               = "${local.name_prefix}-api-gateway-logging-role"
+  name = "${local.name_prefix}-api-gateway-logging-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -133,4 +132,61 @@ resource "aws_iam_policy" "api_gw_logging_policy" {
 resource "aws_iam_role_policy_attachment" "api_gw_logging_role_attach" {
   role       = aws_iam_role.api_gw_logging_role.name
   policy_arn = aws_iam_policy.api_gw_logging_policy.arn
+}
+
+# Data Source for Existing Hosted Zone
+data "aws_route53_zone" "sctp_sandbox" {
+  name         = "sctp-sandbox.com" # Replace with your domain name
+  private_zone = false              # Set to true if it's a private hosted zone
+}
+
+module "acm" {
+  source  = "terraform-aws-modules/acm/aws"
+  version = "~> 4.0"
+
+  domain_name = "${local.name_prefix}.sctp-sandbox.com"
+  zone_id     = data.aws_route53_zone.sctp_sandbox.zone_id
+
+  validation_method = "DNS"
+
+  subject_alternative_names = [
+    "*.${data.aws_route53_zone.sctp_sandbox.name}"
+  ]
+
+  wait_for_validation = true
+
+  tags = {
+    Name = "${local.name_prefix}"
+  }
+}
+
+# Create a Custom Domain Name
+resource "aws_apigatewayv2_domain_name" "custom_domain" {
+  domain_name = "${local.name_prefix}.sctp-sandbox.com"
+
+  domain_name_configuration {
+    certificate_arn = module.acm.acm_certificate_arn # aws_acm_certificate.cert.arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+}
+
+# Map the Custom Domain to the API Gateway Stage
+resource "aws_apigatewayv2_api_mapping" "custom_mapping" {
+  api_id      = aws_apigatewayv2_api.http_api.id
+  stage       = aws_apigatewayv2_stage.default.name
+  domain_name = aws_apigatewayv2_domain_name.custom_domain.domain_name
+}
+
+# Route Traffic Using Route 53
+resource "aws_route53_record" "api_gateway_alias" {
+  zone_id = data.aws_route53_zone.sctp_sandbox.zone_id
+  name    = "${local.name_prefix}.sctp-sandbox.com"
+  type    = "A"
+
+  alias {
+    name                   = aws_apigatewayv2_domain_name.custom_domain.domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.custom_domain.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
+  }
 }
